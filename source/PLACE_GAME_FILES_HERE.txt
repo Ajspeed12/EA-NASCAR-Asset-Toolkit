@@ -1,0 +1,1 @@
+Place CARDATA.DAT and NASCAR.DB from the same game/platform in this folder.

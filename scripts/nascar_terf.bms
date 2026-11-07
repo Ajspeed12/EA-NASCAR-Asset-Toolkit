@@ -1,0 +1,454 @@
+# ============================================================
+# NASCAR 06 TERF extractor
+# nascar_terf.bms
+#
+# CARDATA support:
+# - NASCAR.DB scheme names for known MMAP car textures
+# - MMAP -> .mmap
+# - TMF  -> embedded model name .tmf
+# - TMdl -> embedded model name .tmd
+# - WDSM -> .wds
+# - XA3  -> .xa3
+# - unknown -> HSH1.bin
+#
+# NASCAR.DB must be in the same folder as CARDATA.DAT (source/)
+# ============================================================
+
+quickbmsver "0.8.2"
+
+# Pre-size NASCAR.DB lookup arrays.
+# CARDATA has 548 entries; 2048 gives plenty of headroom.
+
+for INIT = 0 < 2048
+    putarray 10 INIT ""
+    putarray 11 INIT 0
+    putarray 12 INIT 0
+next INIT
+
+# ============================================================
+# READ NASCAR.DB CAR TABLE
+# ============================================================
+
+open FDSE "NASCAR.DB" 1
+
+endian little
+
+math DB_START  = 0x28984
+math DB_COUNT  = 337
+math DB_STRIDE = 0x48
+
+
+for DB_I = 0 < DB_COUNT
+
+    math DB_POS = DB_I
+    math DB_POS * DB_STRIDE
+    math DB_POS + DB_START
+
+    goto DB_POS 1
+
+    get DB_FIELD0 long 1
+    get DB_FIELD1 long 1
+    get DB_FIELD2 long 1
+    get DB_FIELD3 long 1
+
+    get DB_NAME string 1
+
+
+    # FIELD0 high16 = CARDATA entry
+    math DB_ENTRY = DB_FIELD0
+    math DB_ENTRY >> 16
+    math DB_ENTRY & 0xffff
+
+
+    # FIELD2 high16 = year
+    math DB_YEAR = DB_FIELD2
+    math DB_YEAR >> 16
+    math DB_YEAR & 0xffff
+
+
+    if DB_ENTRY != 0xffff
+
+        if DB_NAME != ""
+
+            # Windows-safe filenames
+            string DB_NAME R " " "_"
+            string DB_NAME R "/" "-"
+            string DB_NAME R "\\" "-"
+            string DB_NAME R ":" "-"
+            string DB_NAME R "*" "-"
+            string DB_NAME R "?" ""
+            string DB_NAME R "<" ""
+            string DB_NAME R ">" ""
+            string DB_NAME R "|" "-"
+
+            putarray 10 DB_ENTRY DB_NAME
+            putarray 11 DB_ENTRY DB_YEAR
+            putarray 12 DB_ENTRY 1
+
+        endif
+
+    endif
+
+next DB_I
+
+
+
+# ============================================================
+# RESET TO CARDATA
+# ============================================================
+
+goto 0 0
+
+getdstring INFO_TYPE 4 0
+get INFO_SIZE long 0
+
+endian guess INFO_SIZE
+
+goto 0 0
+
+get TERF_SIZE asize 0
+
+
+
+# ============================================================
+# PARSE TERF
+# ============================================================
+
+for INFO_OFF = 0 != TERF_SIZE
+
+    goto INFO_OFF 0
+
+    getdstring INFO_TYPE 4 0
+    get INFO_SIZE long 0
+
+
+    # --------------------------------------------------------
+    # TERF
+    # --------------------------------------------------------
+
+    if INFO_TYPE u== "TERF"
+
+        getdstring DUMMY 4 0
+        get DUMMY short 0
+        get FILES short 0
+
+
+    # --------------------------------------------------------
+    # HSH1
+    # --------------------------------------------------------
+
+    elif INFO_TYPE u== "HSH1"
+
+        for i = 0 < FILES
+
+            get HASH long 0
+            putarray 4 i HASH
+
+        next i
+
+
+    # --------------------------------------------------------
+    # DIR1
+    # --------------------------------------------------------
+
+    elif INFO_TYPE u== "DIR1"
+
+        for i = 0 < FILES
+
+            get OFFSET long 0
+            get SIZE long 0
+
+            putarray 0 i OFFSET
+            putarray 1 i SIZE
+
+            putarray 2 i 0
+            putarray 3 i 0
+
+        next i
+
+
+    # --------------------------------------------------------
+    # COMP
+    # --------------------------------------------------------
+
+    elif INFO_TYPE u== "COMP"
+
+        for i = 0 < FILES
+
+            get ALGO long 0
+            get XSIZE long 0
+
+            putarray 2 i ALGO
+            putarray 3 i XSIZE
+
+        next i
+
+
+    # --------------------------------------------------------
+    # DATA
+    # --------------------------------------------------------
+
+    elif INFO_TYPE u== "DATA"
+
+        math BASE_OFF = INFO_OFF
+
+
+        for i = 0 < FILES
+
+            getarray OFFSET 0 i
+            getarray SIZE   1 i
+            getarray ALGO   2 i
+            getarray XSIZE  3 i
+            getarray HASH   4 i
+
+            math OFFSET + BASE_OFF
+
+
+            # =================================================
+            # DECOMPRESS
+            # =================================================
+
+            if ALGO == 0
+
+                log MEMORY_FILE OFFSET SIZE 0
+
+            elif ALGO == 1
+
+                comtype TDCB_silence
+                clog MEMORY_FILE OFFSET SIZE XSIZE 0
+
+            elif ALGO == 5
+
+                comtype ea_madden
+                clog MEMORY_FILE OFFSET SIZE XSIZE 0
+
+            else
+
+                print "Unknown compression algorithm %ALGO% at entry %i%"
+                cleanexit
+
+            endif
+
+
+            # =================================================
+            # DEFAULT NAME
+            # =================================================
+
+            string NAME p "%08x" HASH
+
+            set EXT "bin"
+
+
+            # =================================================
+            # READ MAGIC
+            # =================================================
+
+            endian little
+
+            goto 0 MEMORY_FILE
+            get MAGIC long MEMORY_FILE
+
+
+
+            # =================================================
+            # MMAP
+            # 4D 4D 41 50 = MMAP
+            # =================================================
+
+            if MAGIC == 0x50414d4d
+
+                set EXT "mmap"
+
+
+                # Only read DB arrays for MMAP resources.
+
+                set HAS_DB_NAME 0
+
+                if i < 65535
+                    getarray HAS_DB_NAME 12 i
+                endif
+
+
+                if HAS_DB_NAME == 1
+
+                    getarray SCHEME 10 i
+                    getarray YEAR   11 i
+
+                    if YEAR > 1900
+
+                        string NAME p "%d_%s__%08x" YEAR SCHEME HASH
+
+                    else
+
+                        string NAME p "%s__%08x" SCHEME HASH
+
+                    endif
+
+                endif
+
+
+
+            # =================================================
+            # TMF
+            #
+            # little endian numeric magic = 00464D54
+            # embedded name at 0x0C
+            # =================================================
+
+            elif MAGIC == 0x00464d54
+
+                set EXT "tmf"
+
+                goto 0x0c MEMORY_FILE
+                get MODEL_NAME string MEMORY_FILE
+
+                if MODEL_NAME != ""
+                    set NAME MODEL_NAME
+                endif
+
+
+
+            # =================================================
+            # TMD / TMdl
+            #
+            # little endian numeric magic = 6C644D54
+            # =================================================
+
+            elif MAGIC == 0x6c644d54
+
+                set EXT "tmd"
+
+
+                goto 0x08 MEMORY_FILE
+
+                get CHUNK_COUNT short MEMORY_FILE
+                get CHUNK_DIR   short MEMORY_FILE
+
+
+                # Basic sanity guard
+                if CHUNK_COUNT < 256
+
+                    for C = 0 < CHUNK_COUNT
+
+                        math DESC = C
+                        math DESC * 0x10
+                        math DESC + CHUNK_DIR
+
+                        goto DESC MEMORY_FILE
+
+                        getdstring CHUNK_TYPE 4 MEMORY_FILE
+                        get CHUNK_OFFSET long MEMORY_FILE
+
+
+                        if CHUNK_TYPE == "Info"
+
+                            goto CHUNK_OFFSET MEMORY_FILE
+                            get MODEL_NAME string MEMORY_FILE
+
+                            if MODEL_NAME != ""
+
+                                string MODEL_NAME R ".ea3" ""
+
+                                set NAME MODEL_NAME
+
+                            endif
+
+                            break
+
+                        endif
+
+                    next C
+
+                endif
+
+
+
+            # =================================================
+            # WDSM
+            # =================================================
+
+            elif MAGIC == 0x4d534457
+
+                set EXT "wds"
+
+
+
+            # =================================================
+            # XA3
+            #
+            # Known NASCAR 06 XA3 is a 130-byte ASCII record
+            # starting with 'x'.
+            # =================================================
+
+            else
+
+                get FILESIZE asize MEMORY_FILE
+
+                if FILESIZE == 130
+
+                    goto 0 MEMORY_FILE
+                    get FIRST_BYTE byte MEMORY_FILE
+
+                    if FIRST_BYTE == 0x78
+                        set EXT "xa3"
+                    endif
+
+                endif
+
+            endif
+
+
+
+            # =================================================
+            # OUTPUT NAME
+            # ============================================================
+
+            string OUTPUT p "%s.%s" NAME EXT
+
+
+            # =================================================
+            # DUPLICATE PROTECTION
+            # ============================================================
+
+            set FINAL OUTPUT
+            math DUP_NUM = 1
+
+
+            for CHECK = 0 < i
+
+                getarray OLD_NAME 5 CHECK
+
+                if OLD_NAME == FINAL
+
+                    math DUP_NUM + 1
+
+                    string FINAL p "%s_%d.%s" NAME DUP_NUM EXT
+
+                    math CHECK = -1
+
+                endif
+
+            next CHECK
+
+
+            putarray 5 i FINAL
+
+
+
+            # =================================================
+            # WRITE
+            # ============================================================
+
+            get MEM_SIZE asize MEMORY_FILE
+
+            log FINAL 0 MEM_SIZE MEMORY_FILE
+
+
+        next i
+
+    endif
+
+
+    math INFO_OFF + INFO_SIZE
+
+next
